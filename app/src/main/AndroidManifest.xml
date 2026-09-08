@@ -7,20 +7,30 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="发送到企微群"
+        android:label="发送到企微"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Translucent.NoTitleBar">
 
         <activity
-            android:name=".ShareReceiverActivity"
-            android:exported="true"
-            android:noHistory="true"
-            android:excludeFromRecents="true">
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="image/*" />
-            </intent-filter>
-        </activity>
+    android:name=".ShareReceiverActivity"
+    android:exported="true"
+    android:noHistory="true"
+    android:excludeFromRecents="true">
+
+    <!-- 单文件/单图分享 -->
+    <intent-filter>
+        <action android:name="android.intent.action.SEND" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="*/*" />
+    </intent-filter>
+
+    <!-- 多文件/多图分享 -->
+    <intent-filter>
+        <action android:name="android.intent.action.SEND_MULTIPLE" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="*/*" />
+    </intent-filter>
+
+</activity>
     </application>
 </manifest>

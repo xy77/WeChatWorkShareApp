@@ -11,11 +11,14 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class FileServer(
     private val context: Context,
     port: Int = 8080,
-    private val onLog: (String) -> Unit,
+    private val onLog: (time: String, msg: String) -> Unit,
     private val onTextReceived: (String) -> Unit
 ) : NanoHTTPD(port) {
 
@@ -30,6 +33,9 @@ class FileServer(
         }
     }
 
+    private fun currentTime(): String =
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
     private fun handleFileUpload(session: IHTTPSession): Response {
         val rawName = session.parameters["name"]?.firstOrNull()
             ?: "file_${System.currentTimeMillis()}"
@@ -42,10 +48,11 @@ class FileServer(
 
         return try {
             saveStreamToDownloads(safeName, contentLength, session.inputStream)
-            onLog("已接收文件: $safeName (${formatSize(contentLength)})")
-            newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
+            val time = currentTime()
+            onLog(time, "已接收文件: $safeName (${formatSize(contentLength)})")
+            newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, time)
         } catch (e: Exception) {
-            onLog("接收失败: ${e.message}")
+            onLog(currentTime(), "接收失败: ${e.message}")
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Error: ${e.message}")
         }
     }
@@ -66,9 +73,10 @@ class FileServer(
                 remaining -= read
             }
             val text = out.toString("UTF-8")
+            val time = currentTime()
             onTextReceived(text)
-            onLog("已接收文本 (${text.length} 字)")
-            newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
+            onLog(time, "已接收文本 (${text.length} 字)")
+            newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, time)
         } catch (e: Exception) {
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Error: ${e.message}")
         }
@@ -119,11 +127,11 @@ class FileServer(
           <title>LanDrop - 发送到安卓测试机</title>
           <style>
             * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-            body { max-width: 560px; margin: 40px auto; padding: 0 20px; background: #f5f7fa; color: #1f2937; }
+            body { max-width: 560px; margin: 40px auto; padding: 0 20px; background: #f5f7fa; color: #1f2937; min-height: calc(100vh - 80px); }
             .card { background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); margin-bottom: 20px; }
             h2 { margin: 0 0 16px; font-size: 18px; }
             .drop-zone { border: 2px dashed #cbd5e1; border-radius: 10px; padding: 36px 20px; text-align: center; cursor: pointer; transition: .2s; background: #f8fafc; }
-            .drop-zone.dragover { border-color: #2563eb; background: #eff6ff; }
+            .drop-zone:hover { border-color: #2563eb; background: #eff6ff; }
             .btn { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; cursor: pointer; }
             .btn:hover { background: #1d4ed8; }
             textarea { width: 100%; height: 90px; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; font-size: 14px; resize: vertical; margin-bottom: 10px; }
@@ -131,13 +139,39 @@ class FileServer(
             progress { width: 100%; height: 8px; margin-top: 4px; }
             .status { color: #059669; font-weight: 500; }
             .err { color: #dc2626; }
+            .drag-overlay {
+              position: fixed;
+              inset: 0;
+              background: rgba(37, 99, 235, 0.14);
+              backdrop-filter: blur(2px);
+              border: 3px dashed #2563eb;
+              display: none;
+              align-items: center;
+              justify-content: center;
+              z-index: 9999;
+              pointer-events: none;
+            }
+            .drag-overlay.active { display: flex; }
+            .drag-overlay-box {
+              background: #ffffff;
+              color: #1d4ed8;
+              padding: 20px 32px;
+              border-radius: 12px;
+              font-size: 16px;
+              font-weight: 600;
+              box-shadow: 0 8px 24px rgba(37, 99, 235, 0.18);
+            }
           </style>
         </head>
         <body>
+          <div class="drag-overlay" id="dragOverlay">
+            <div class="drag-overlay-box">松开鼠标，立即发送文件到手机</div>
+          </div>
+
           <div class="card">
             <h2>发送文件到手机 Download 目录</h2>
             <div class="drop-zone" id="dropZone">
-              点击选择文件，或将文件拖拽到此处（支持多选）
+              点击选择文件，或拖拽文件到网页任意位置（支持多选）
               <input type="file" id="fileInput" multiple style="display:none" />
             </div>
             <div id="fileList"></div>
@@ -145,8 +179,8 @@ class FileServer(
 
           <div class="card">
             <h2>发送文本 / 链接</h2>
-            <textarea id="textInput" placeholder="输入测试链接、账号或文本..."></textarea>
-            <button class="btn" onclick="sendText()">发送到手机</button>
+            <textarea id="textInput" placeholder="输入任意内容后发送"></textarea>
+            <button class="btn" id="sendTextBtn" onclick="sendText()" style="display:none">发送到手机</button>
             <span id="textStatus" style="margin-left:10px;font-size:13px;"></span>
           </div>
 
@@ -154,16 +188,45 @@ class FileServer(
             const dropZone = document.getElementById('dropZone');
             const fileInput = document.getElementById('fileInput');
             const fileList = document.getElementById('fileList');
+            const dragOverlay = document.getElementById('dragOverlay');
+            const textInput = document.getElementById('textInput');
+            const sendTextBtn = document.getElementById('sendTextBtn');
+
+            function updateSendBtnVisibility() {
+              sendTextBtn.style.display = textInput.value.trim().length > 0 ? 'inline-block' : 'none';
+            }
+            textInput.addEventListener('input', updateSendBtnVisibility);
 
             dropZone.onclick = () => fileInput.click();
-            dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragover'); };
-            dropZone.ondragleave = () => dropZone.classList.remove('dragover');
-            dropZone.ondrop = (e) => {
-              e.preventDefault();
-              dropZone.classList.remove('dragover');
-              handleFiles(e.dataTransfer.files);
+            fileInput.onchange = () => {
+              handleFiles(fileInput.files);
+              fileInput.value = '';
             };
-            fileInput.onchange = () => handleFiles(fileInput.files);
+
+            let dragDepth = 0;
+            window.addEventListener('dragenter', (e) => {
+              e.preventDefault();
+              dragDepth++;
+              dragOverlay.classList.add('active');
+            });
+            window.addEventListener('dragover', (e) => {
+              e.preventDefault();
+            });
+            window.addEventListener('dragleave', (e) => {
+              e.preventDefault();
+              dragDepth = Math.max(0, dragDepth - 1);
+              if (dragDepth === 0) {
+                dragOverlay.classList.remove('active');
+              }
+            });
+            window.addEventListener('drop', (e) => {
+              e.preventDefault();
+              dragDepth = 0;
+              dragOverlay.classList.remove('active');
+              if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                handleFiles(e.dataTransfer.files);
+              }
+            });
 
             function handleFiles(files) {
               Array.from(files).forEach(uploadFile);
@@ -172,7 +235,19 @@ class FileServer(
             function uploadFile(file) {
               const row = document.createElement('div');
               row.className = 'item';
-              row.innerHTML = '<div>' + file.name + ' <span class="st">上传中 0%</span></div><progress max="100" value="0"></progress>';
+              const header = document.createElement('div');
+              const nameSpan = document.createElement('span');
+              nameSpan.textContent = file.name + ' ';
+              const stSpan = document.createElement('span');
+              stSpan.className = 'st';
+              stSpan.textContent = '上传中 0%';
+              header.appendChild(nameSpan);
+              header.appendChild(stSpan);
+              const prog = document.createElement('progress');
+              prog.max = 100;
+              prog.value = 0;
+              row.appendChild(header);
+              row.appendChild(prog);
               fileList.prepend(row);
 
               const xhr = new XMLHttpRequest();
@@ -182,37 +257,43 @@ class FileServer(
               xhr.upload.onprogress = (e) => {
                 if (e.lengthComputable) {
                   const pct = Math.round((e.loaded / e.total) * 100);
-                  row.querySelector('progress').value = pct;
-                  row.querySelector('.st').textContent = '上传中 ' + pct + '%';
+                  prog.value = pct;
+                  stSpan.textContent = '上传中 ' + pct + '%';
                 }
               };
               xhr.onload = () => {
-                const st = row.querySelector('.st');
                 if (xhr.status === 200) {
-                  st.textContent = '已完成';
-                  st.className = 'st status';
+                  const time = (xhr.responseText || '').trim();
+                  stSpan.textContent = time ? ('已发送 [' + time + ']') : '已发送';
+                  stSpan.className = 'st status';
                 } else {
-                  st.textContent = '失败: ' + xhr.responseText;
-                  st.className = 'st err';
+                  stSpan.textContent = '失败: ' + xhr.responseText;
+                  stSpan.className = 'st err';
                 }
               };
               xhr.onerror = () => {
-                const st = row.querySelector('.st');
-                st.textContent = '网络中断';
-                st.className = 'st err';
+                stSpan.textContent = '网络中断';
+                stSpan.className = 'st err';
               };
               xhr.send(file);
             }
 
             function sendText() {
-              const text = document.getElementById('textInput').value.trim();
+              const text = textInput.value.trim();
               const status = document.getElementById('textStatus');
               if (!text) return;
               fetch('/text', { method: 'POST', body: text })
-                .then(r => {
-                  status.textContent = r.ok ? '已发送' : '发送失败';
-                  status.style.color = r.ok ? '#059669' : '#dc2626';
-                  if (r.ok) document.getElementById('textInput').value = '';
+                .then(async r => {
+                  if (r.ok) {
+                    const time = (await r.text()).trim();
+                    status.textContent = time ? ('已发送 [' + time + ']') : '已发送';
+                    status.style.color = '#059669';
+                    textInput.value = '';
+                    updateSendBtnVisibility();
+                  } else {
+                    status.textContent = '发送失败';
+                    status.style.color = '#dc2626';
+                  }
                 })
                 .catch(() => { status.textContent = '连接失败'; status.style.color = '#dc2626'; });
             }

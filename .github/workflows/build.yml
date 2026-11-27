@@ -13,13 +13,26 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.5
-      - name: Build with Gradle
-        run: gradle assembleDebug
-      - name: Upload APK
+      - name: Build APKs with Gradle
+        run: gradle :app:assembleDebug :landrop:assembleDebug
+      - name: Rename APKs
+        run: |
+          mkdir -p release_apks
+          cp app/build/outputs/apk/debug/app-debug.apk release_apks/WeChatWorkShare.apk
+          cp landrop/build/outputs/apk/debug/landrop-debug.apk release_apks/LanDrop.apk
+          ls -lh release_apks/
+      - name: Upload WeChatWorkShare APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: WeChatWorkShare
+          path: release_apks/WeChatWorkShare.apk
+          if-no-files-found: error
+      - name: Upload LanDrop APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LanDrop
+          path: release_apks/LanDrop.apk
+          if-no-files-found: error

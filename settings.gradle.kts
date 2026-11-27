@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "WeChatWorkShareApp"
 include(":app")
+include(":landrop")
